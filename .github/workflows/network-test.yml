@@ -1,0 +1,115 @@
+name: Windows Runner Network Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  network-test:
+    runs-on: windows-2025
+    timeout-minutes: 5
+
+    steps:
+      - name: Runner Information
+        shell: pwsh
+        run: |
+          Write-Host "=== SYSTEM ==="
+          systeminfo | Select-String "OS Name|System Type"
+          Write-Host "=== PYTHON ==="
+          python --version
+          Write-Host "=== NETWORK ==="
+          Get-NetIPConfiguration
+
+      - name: Run TCP and UDP Tests
+        shell: pwsh
+        run: |
+          @'
+          import socket
+          import time
+
+          print("\n=== LOCAL UDP TEST ===")
+
+          try:
+              server = socket.socket(
+                  socket.AF_INET, socket.SOCK_DGRAM
+              )
+              server.bind(("127.0.0.1", 0))
+              port = server.getsockname()[1]
+
+              client = socket.socket(
+                  socket.AF_INET, socket.SOCK_DGRAM
+              )
+              client.settimeout(3)
+
+              client.sendto(b"LOCAL TEST", ("127.0.0.1", port))
+              data, addr = server.recvfrom(1024)
+
+              print("LOCAL UDP SUCCESS:", data.decode())
+              client.close()
+              server.close()
+
+          except Exception as e:
+              print("LOCAL UDP FAILED:", e)
+
+          print("\n=== PUBLIC UDP DNS TEST ===")
+
+          for dns in ["1.1.1.1", "8.8.8.8"]:
+              try:
+                  qid = 0x1234
+                  header = (
+                      qid.to_bytes(2, "big") +
+                      b"\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+                  )
+                  question = (
+                      b"\x07example\x03com\x00" +
+                      b"\x00\x01\x00\x01"
+                  )
+                  packet = header + question
+
+                  s = socket.socket(
+                      socket.AF_INET, socket.SOCK_DGRAM
+                  )
+                  s.settimeout(4)
+                  s.sendto(packet, (dns, 53))
+
+                  data, addr = s.recvfrom(4096)
+
+                  if data[:2] == qid.to_bytes(2, "big"):
+                      print("UDP DNS SUCCESS:", dns, addr)
+                  else:
+                      print("UDP DNS INVALID RESPONSE:", dns)
+
+                  s.close()
+
+              except Exception as e:
+                  print("UDP DNS FAILED:", dns, str(e))
+
+          print("\n=== TCP 443 TEST ===")
+
+          try:
+              s = socket.create_connection(
+                  ("github.com", 443), timeout=5
+              )
+              print("TCP 443 SUCCESS:", s.getpeername())
+              s.close()
+          except Exception as e:
+              print("TCP FAILED:", e)
+
+          print("\n=== UDP PORT BIND TEST ===")
+
+          try:
+              s = socket.socket(
+                  socket.AF_INET, socket.SOCK_DGRAM
+              )
+              s.bind(("0.0.0.0", 8080))
+              print("UDP 8080 BIND SUCCESS")
+              s.close()
+          except Exception as e:
+              print("UDP 8080 BIND FAILED:", e)
+
+          print("\n=== TEST COMPLETED ===")
+          '@ | Set-Content -Encoding utf8 network_test.py
+
+          python network_test.py
