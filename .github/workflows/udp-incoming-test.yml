@@ -1,0 +1,73 @@
+name: GitHub Public UDP Incoming Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  udp-incoming:
+    runs-on: windows-2025
+    timeout-minutes: 5
+
+    steps:
+      - name: Start UDP Listener
+        shell: pwsh
+        run: |
+          Write-Host "=== PUBLIC IP ==="
+
+          $ip = Invoke-RestMethod "https://api.ipify.org"
+          Write-Host "PUBLIC_IP=$ip"
+
+          Write-Host "=== FIREWALL ==="
+
+          try {
+            New-NetFirewallRule `
+              -DisplayName "UDP Incoming Test" `
+              -Direction Inbound `
+              -Protocol UDP `
+              -LocalPort 54321 `
+              -Action Allow `
+              -ErrorAction Stop
+
+            Write-Host "FIREWALL RULE CREATED"
+          }
+          catch {
+            Write-Host "FIREWALL RULE ERROR: $_"
+          }
+
+          Write-Host "=== STARTING UDP LISTENER ==="
+
+          @'
+          import socket
+          import time
+
+          PORT = 54321
+          s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+          s.bind(("0.0.0.0", PORT))
+          s.settimeout(1)
+
+          print(f"UDP LISTENER READY ON PORT {PORT}", flush=True)
+          print("WAITING FOR EXTERNAL PACKETS...", flush=True)
+
+          end = time.time() + 120
+          received = False
+
+          while time.time() < end:
+              try:
+                  data, addr = s.recvfrom(4096)
+                  print("INCOMING UDP RECEIVED!", flush=True)
+                  print("SOURCE:", addr, flush=True)
+                  print("DATA:", data.decode(errors="replace"), flush=True)
+                  received = True
+              except socket.timeout:
+                  pass
+
+          if not received:
+              print("NO EXTERNAL UDP PACKET RECEIVED", flush=True)
+
+          s.close()
+          '@ | Set-Content udp_listener.py
+
+          python udp_listener.py
